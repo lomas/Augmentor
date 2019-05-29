@@ -19,18 +19,13 @@ from builtins import *
 from .Operations import *
 from .ImageUtilities import scan_directory, scan, scan_dataframe, AugmentorImage
 
-import os
+import os,pdb
 import sys
 import random
 import uuid
 import warnings
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
-
-# NOTE:
-# https://pypi.org/project/futures/ mentions:
-# The ProcessPoolExecutor class has known (unfixable) problems on Python 2 and
-# should not be relied on for mission critical work.
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from tqdm import tqdm
 from PIL import Image
@@ -49,7 +44,7 @@ class Pipeline(object):
     _valid_formats = ["PNG", "BMP", "GIF", "JPEG"]
     _legal_filters = ["NEAREST", "BICUBIC", "ANTIALIAS", "BILINEAR"]
 
-    def __init__(self, source_directory=None, output_directory="output", save_format=None):
+    def __init__(self, source_directory=None, ground_truth_directory=None, output_directory="output", save_format=None):
         """
         Create a new Pipeline object pointing to a directory containing your
         original image dataset.
@@ -82,12 +77,19 @@ class Pipeline(object):
         self.operations = []
         self.class_labels = []
         self.process_ground_truth_images = False
+        
 
+        
+
+            
         if source_directory is not None:
             self._populate(source_directory=source_directory,
                            output_directory=output_directory,
-                           ground_truth_directory=None,
+                           ground_truth_directory=ground_truth_directory,
                            ground_truth_output_directory=output_directory)
+                           
+        if ground_truth_directory:
+            self._ground_truth(ground_truth_directory)                           
 
     def __call__(self, augmentor_image):
         """
@@ -141,11 +143,14 @@ class Pipeline(object):
 
         # Get absolute path for output
         abs_output_directory = os.path.join(source_directory, output_directory)
-
+        if ground_truth_directory:
+            abs_gt_output_directory = os.path.join(abs_output_directory, "gts")
+        else: 
+            abs_gt_output_directory = None
         # Scan the directory that user supplied.
         self.augmentor_images, self.class_labels = scan(source_directory, abs_output_directory)
 
-        self._check_images(abs_output_directory)
+        self._check_images(abs_output_directory,abs_gt_output_directory)
 
     def _populate_image_arrays(self):
         """
@@ -158,7 +163,7 @@ class Pipeline(object):
         warnings.warn("Currently not implemented. Do not call directly.")
         return 1
 
-    def _check_images(self, abs_output_directory):
+    def _check_images(self, abs_output_directory,abs_gt_output_directory = None):
         """
         Private method. Used to check images as they are added to the
         pipeline. Do not call directly.
@@ -173,6 +178,12 @@ class Pipeline(object):
                 except IOError:
                     print("Insufficient rights to read or write output directory (%s)"
                           % abs_output_directory)
+            if not os.path.exists(abs_gt_output_directory):
+                try:
+                    os.makedirs(abs_gt_output_directory)
+                except IOError:
+                    print("Insufficient rights to read or write output directory (%s)"
+                          % abs_gt_output_directory)                          
         else:
             for class_label in self.class_labels:
                 if not os.path.exists(os.path.join(abs_output_directory, str(class_label[0]))):
@@ -247,22 +258,30 @@ class Pipeline(object):
                                     + file_name \
                                     + "." \
                                     + (self.save_format if self.save_format else augmentor_image.file_format)
-
+                        #pdb.set_trace()
                         images[i].save(os.path.join(augmentor_image.output_directory, save_name))
-
+                        #print(augmentor_image.ground_truth())
                     else:
-                        save_name = "_groundtruth_(" \
-                                    + str(i) \
-                                    + ")_" \
-                                    + augmentor_image.class_label \
-                                    + "_" \
+                        #save_name = "_groundtruth_(" \
+                         #           + str(i) \
+                         #           + ")_" \
+                         #           + augmentor_image.class_label \
+                          #          + "_" \
+                           #         + os.path.basename(augmentor_image.image_path) \
+                            #        + "_" \
+                             #       + file_name \
+                              #      + "." \
+                               #     + (self.save_format if self.save_format else augmentor_image.file_format)
+                        save_name = augmentor_image.class_label \
+                                    + "_original_" \
                                     + os.path.basename(augmentor_image.image_path) \
                                     + "_" \
                                     + file_name \
                                     + "." \
                                     + (self.save_format if self.save_format else augmentor_image.file_format)
-
-                        images[i].save(os.path.join(augmentor_image.output_directory, save_name))
+                        #print(os.path.join(augmentor_image.output_directory, "gts", save_name))
+                        images[i].save(os.path.join(augmentor_image.output_directory, "gts", save_name))
+#                        images[i].save(os.path.join(augmentor_image.output_directory, save_name))
 
             except IOError as e:
                 print("Error writing %s, %s. Change save_format to PNG?" % (file_name, e.message))
@@ -323,6 +342,35 @@ class Pipeline(object):
         else:
             self.save_format = save_format
 
+    def sample_with_label(self, n, multi_threaded=True):
+        if len(self.augmentor_images) == 0:
+            raise IndexError("There are no images in the pipeline. "
+                             "Add a directory using add_directory(), "
+                             "pointing it to a directory containing images.")
+
+        if len(self.operations) == 0:
+            raise IndexError("There are no operations associated with this pipeline.")
+        image_labels = list(set([image.class_label for image in self.augmentor_images]))
+        for label in image_labels:
+            augmentor_images_with_label = list(filter(lambda image: image.class_label == label, self.augmentor_images))
+            augmentor_images = [random.choice(augmentor_images_with_label) for _ in range(n)]
+
+            if multi_threaded:
+                # TODO: Restore the functionality (appearance of progress bar) from the pre-multi-thread code above.
+                with tqdm(total=len(augmentor_images), desc="Executing Pipeline", unit=" Samples") as progress_bar:
+                    with ThreadPoolExecutor(max_workers=None) as executor:
+                        for result in executor.map(self, augmentor_images):
+                            progress_bar.set_description("Processing %s" % result)
+                            progress_bar.update(1)
+            else:
+                with tqdm(total=len(augmentor_images), desc="Executing Pipeline", unit=" Samples") as progress_bar:
+                    for augmentor_image in augmentor_images:
+                        self._execute(augmentor_image)
+                        progress_bar.set_description("Label %s Processing %s" % (label,os.path.basename(augmentor_image.image_path)))
+                        progress_bar.update(1)
+
+            # This does not work as it did in the pre-multi-threading code above for some reason.
+            # progress_bar.close()
     def sample(self, n, multi_threaded=True):
         """
         Generate :attr:`n` number of samples from the current pipeline.
@@ -800,21 +848,12 @@ class Pipeline(object):
 
         print("Images: %s" % len(self.augmentor_images))
 
-        # TODO: find a better way that doesn't need to iterate over every image
-        # TODO: get rid of this label_pair property as nowhere else uses it
-        # Check if we have any labels before printing label information.
-        label_count = 0
-        for image in self.augmentor_images:
-            if image.label_pair is not None:
-                label_count += 1
+        label_pairs = sorted(set([x.label_pair for x in self.augmentor_images]))
 
-        if len(label_count) != 0:
-            label_pairs = sorted(set([x.label_pair for x in self.augmentor_images]))
+        print("Classes: %s" % len(label_pairs))
 
-            print("Classes: %s" % len(label_pairs))
-
-            for label_pair in label_pairs:
-                print ("\tClass index: %s Class label: %s " % (label_pair[0], label_pair[1]))
+        for label_pair in label_pairs:
+            print ("\tClass index: %s Class label: %s " % (label_pair[0], label_pair[1]))
 
         if len(self.augmentor_images) != 0:
             print("Dimensions: %s" % len(self.distinct_dimensions))
@@ -1567,7 +1606,14 @@ class Pipeline(object):
             raise ValueError(Pipeline._probability_error_text)
         else:
             self.add_operation(Invert(probability=probability))
-
+   
+    
+    def shuffle_channel(self,probability):
+        if not 0 < probability <= 1:
+            raise ValueError(Pipeline._probability_error_text)
+        else:
+            self.add_operation(ShuffleChannel(probability=probability))
+            
     def random_brightness(self,probability,min_factor,max_factor):
         """
         Random change brightness of an image.
@@ -1663,7 +1709,7 @@ class Pipeline(object):
         else:
             self.add_operation(RandomErasing(probability=probability, rectangle_area=rectangle_area))
 
-    def ground_truth(self, ground_truth_directory):
+    def _ground_truth(self, ground_truth_directory):
         """
         Specifies a directory containing corresponding images that
         constitute respective ground truth images for the images
@@ -1772,13 +1818,24 @@ class DataFramePipeline(Pipeline):
         super(DataFramePipeline, self).__init__(source_directory=None,
                                                 output_directory=output_directory,
                                                 save_format=save_format)
+        self._populate(source_dataframe,
+                  image_col,
+                  category_col,
+                  output_directory,
+                  save_format)
 
-        self._populate(source_dataframe, image_col, category_col, output_directory, save_format)
-
-    def _populate(self, source_dataframe, image_col, category_col, output_directory, save_format):
+    def _populate(self,
+                  source_dataframe,
+                  image_col,
+                  category_col,
+                  output_directory,
+                  save_format):
         # Assume we have an absolute path for the output
         # Scan the directory that user supplied.
-        self.augmentor_images, self.class_labels = scan_dataframe(source_dataframe, image_col, category_col, output_directory)
+        self.augmentor_images, self.class_labels = scan_dataframe(source_dataframe,
+                                                                   image_col,
+                                                                   category_col,
+                                                                  output_directory)
 
         self._check_images(output_directory)
 
@@ -1911,6 +1968,7 @@ class DataPipeline(Pipeline):
                 if r <= operation.probability:
                     images_to_return = operation.perform_operation(images_to_return)
 
+            # Convert to array data
             images_to_return = [np.asarray(x) for x in images_to_return]
 
             if self.labels:
