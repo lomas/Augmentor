@@ -136,6 +136,7 @@ class Pipeline(object):
         if not os.path.exists(source_directory):
             raise IOError("The source directory you specified does not exist.")
 
+        
         # If a ground truth directory is being specified we will check here if the path exists at all.
         if ground_truth_directory:
             if not os.path.exists(ground_truth_directory):
@@ -178,7 +179,7 @@ class Pipeline(object):
                 except IOError:
                     print("Insufficient rights to read or write output directory (%s)"
                           % abs_output_directory)
-            if not os.path.exists(abs_gt_output_directory):
+            if abs_gt_output_directory and (not os.path.exists(abs_gt_output_directory)):
                 try:
                     os.makedirs(abs_gt_output_directory)
                 except IOError:
