@@ -324,7 +324,17 @@ def scan_dataframe(source_dataframe, image_col, category_col, output_directory):
 
     return augmentor_images, class_labels
 
-
+def scan_directory_recursive(source_directory,file_types):
+    list_of_files = []
+    for rdir,_,names in os.walk(source_directory):
+        for name in names:
+            _,exts = os.path.splitext(name)
+            exts = "*" + exts
+            if exts not in set(file_types):
+                continue
+            list_of_files.append(os.path.join(rdir,name))
+    return list_of_files
+import pdb
 def scan_directory(source_directory):
     """
     Scan a directory for images, returning any images found with the
@@ -340,15 +350,18 @@ def scan_directory(source_directory):
     file_types = ['*.jpg', '*.bmp', '*.jpeg', '*.gif', '*.img', '*.png', '*.tiff', '*.tif']
 
     list_of_files = []
-
+    #print(source_directory)
     if os.name == "nt":
-        for file_type in file_types:
-            list_of_files.extend(glob.glob(os.path.join(os.path.abspath(source_directory), file_type)))
+        #for file_type in file_types:
+            #list_of_files.extend(glob.glob(os.path.join(os.path.abspath(source_directory), file_type),recursive=True))
+        list_of_files.extend(scan_directory_recursive(os.path.abspath(source_directory), file_types)) #glob.glob() does not recursive-scanning??
     else:
         file_types.extend([str.upper(str(x)) for x in file_types])
-        for file_type in file_types:
-            list_of_files.extend(glob.glob(os.path.join(os.path.abspath(source_directory), file_type)))
-
+        #for file_type in file_types:
+            #list_of_files.extend(glob.glob(os.path.join(os.path.abspath(source_directory), file_type),recursive=True))
+        list_of_files.extend(scan_directory_recursive(os.path.abspath(source_directory), file_types))
+    #print(len(list_of_files))
+    
     return list_of_files
 
 
